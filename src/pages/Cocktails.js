@@ -15,14 +15,22 @@ const Cocktails = () => {
   const fetchDifyResponse = useCallback(async (cocktailName, spirit = null) => {
     setDifyLoading(true);
     try {
+      const difyInputs = cocktailName ? {
+        // When searching by cocktail name
+        Cocktail: cocktailName,
+        Mode: 'cocktail'
+      } : {
+        // When searching by spirit
+        Spirit: spirit,
+        Mode: 'spirit'
+      };
+
+      console.log('Sending to Dify:', difyInputs);
+
       const response = await axios.post(
         'https://api.dify.ai/v1/workflows/run',
         {
-          inputs: { 
-            Cocktail: cocktailName || 'random',
-            Spirit: spirit || 'any',
-            Mode: cocktailName ? 'search' : 'spirit'
-          },
+          inputs: difyInputs,
           response_mode: 'blocking',
           user: 'abc-123'
         },
@@ -40,14 +48,15 @@ const Cocktails = () => {
       console.log('Recipe data:', recipeStr);
       
       if (!recipeStr) {
-        setDifyTextResponse({
-          name: cocktailName || 'Error',
+        const errorResponse = {
+          name: cocktailName || spirit || 'Error',
           category: 'Error',
           instructions: { en: 'No recipe was found. Please try again.' },
           ingredients: [],
           tags: []
-        });
-        return [];
+        };
+        setDifyTextResponse(errorResponse);
+        throw new Error('No recipe found');
       }
 
       try {
@@ -56,8 +65,8 @@ const Cocktails = () => {
         console.log('Parsed recipe:', recipe);
 
         // Format the recipe data for display
-        setDifyTextResponse({
-          name: recipe.recipe_name || cocktailName || 'Custom Cocktail',
+        const formattedRecipe = {
+          name: recipe.recipe_name || cocktailName || spirit || 'Custom Cocktail',
           category: recipe.keywords?.[0] || 'AI Generated Recipe',
           instructions: {
             en: Array.isArray(recipe.instructions) ? recipe.instructions.join('\n') : recipe.instructions || 'No instructions available',
@@ -70,29 +79,32 @@ const Cocktails = () => {
             'Prep Time': recipe.prep_time,
             'Chill Time': recipe.chill_time
           }
-        });
+        };
+        setDifyTextResponse(formattedRecipe);
       } catch (parseError) {
         console.error('Error parsing recipe JSON:', parseError);
         console.error('Raw recipe string:', recipeStr);
-        setDifyTextResponse({
-          name: cocktailName || 'Error',
+        const errorResponse = {
+          name: cocktailName || spirit || 'Error',
           category: 'Error',
           instructions: { en: 'Failed to parse recipe data. Please try again.' },
           ingredients: [],
           tags: []
-        });
+        };
+        setDifyTextResponse(errorResponse);
+        throw parseError;
       }
-      return [];
     } catch (error) {
       console.error('Error fetching recipe:', error);
-      setDifyTextResponse({
-        name: cocktailName || 'Error',
+      const errorResponse = {
+        name: cocktailName || spirit || 'Error',
         category: 'Error',
         instructions: { en: 'Failed to fetch recipe. Please try again.' },
         ingredients: [],
         tags: []
-      });
-      return [];
+      };
+      setDifyTextResponse(errorResponse);
+      throw error;
     } finally {
       setDifyLoading(false);
     }
@@ -123,30 +135,39 @@ const Cocktails = () => {
         // If no results, try Dify API
         if (drinks.length === 0) {
           console.log('No drinks found in CocktailDB, trying Dify API...');
-          const difyResults = await fetchDifyResponse(searchTerm, spirit);
-          console.log('Received Dify results:', difyResults);
-          drinks = difyResults;
+          try {
+            await fetchDifyResponse(searchTerm);
+          } catch (difyError) {
+            console.log('Dify API error:', difyError);
+          }
         }
 
         console.log('Setting cocktails state with:', drinks);
         setCocktails(drinks || []);
       } else if (spirit) {
         // First try CocktailDB for spirit
-        response = await axios.get(
-          `https://www.thecocktaildb.com/api/json/v1/1/filter.php?i=${spirit}`
-        );
-        let drinks = response.data.drinks || [];
-
-        // If no results, try Dify API with spirit only
-        if (drinks.length === 0) {
-          console.log('No drinks found in CocktailDB for spirit, trying Dify API...');
-          const difyResults = await fetchDifyResponse(null, spirit);
-          console.log('Received Dify results for spirit:', difyResults);
-          drinks = difyResults;
+        try {
+          response = await axios.get(
+            `https://www.thecocktaildb.com/api/json/v1/1/filter.php?i=${spirit}`
+          );
+          let drinks = response.data.drinks;
+          
+          // Check if we got valid data back
+          if (drinks && drinks.length > 0 && drinks[0].strDrink) {
+            console.log('Found valid drinks in CocktailDB:', drinks);
+            setCocktails(drinks);
+          } else {
+            // If no valid data, use Dify
+            console.log('No valid drinks found in CocktailDB, trying Dify API...');
+            await fetchDifyResponse(null, spirit);
+            setCocktails([]); // Clear cocktails when showing Dify result
+          }
+        } catch (cocktailDbError) {
+          // If CocktailDB fails, try Dify
+          console.log('CocktailDB error, trying Dify API:', cocktailDbError);
+          await fetchDifyResponse(null, spirit);
+          setCocktails([]);
         }
-
-        console.log('Setting cocktails state with:', drinks);
-        setCocktails(drinks || []);
       }
     } catch (error) {
       console.error('Error fetching cocktail details:', {
@@ -169,8 +190,12 @@ const Cocktails = () => {
   }, [navigate]);
 
   const renderCocktails = () => {
-    if (cocktails.length === 0 && !difyTextResponse && !loading && !difyLoading) {
-      return <div className="no-results">No cocktails found</div>;
+    // Don't show "No cocktails found" if we have a Dify response
+    if (cocktails.length === 0) {
+      if (!difyTextResponse && !loading && !difyLoading) {
+        return <div className="no-results">No cocktails found</div>;
+      }
+      return null;
     }
 
     return (
