@@ -12,13 +12,17 @@ const Cocktails = () => {
   const navigate = useNavigate();
 
 
-  const fetchDifyResponse = useCallback(async (cocktailName) => {
+  const fetchDifyResponse = useCallback(async (cocktailName, spirit = null) => {
     setDifyLoading(true);
     try {
       const response = await axios.post(
         'https://api.dify.ai/v1/workflows/run',
         {
-          inputs: { Cocktail: cocktailName },
+          inputs: { 
+            Cocktail: cocktailName || 'random',
+            Spirit: spirit || 'any',
+            Mode: cocktailName ? 'search' : 'spirit'
+          },
           response_mode: 'blocking',
           user: 'abc-123'
         },
@@ -31,6 +35,7 @@ const Cocktails = () => {
         }
       );
 
+      console.log('Full Dify response:', response.data);
       const recipeStr = response.data?.data?.outputs?.Recipe;
       console.log('Recipe data:', recipeStr);
       
@@ -55,8 +60,8 @@ const Cocktails = () => {
           name: recipe.recipe_name || cocktailName || 'Custom Cocktail',
           category: recipe.keywords?.[0] || 'AI Generated Recipe',
           instructions: {
-            en: recipe.instructions.join('\n'),
-            description: recipe.description
+            en: Array.isArray(recipe.instructions) ? recipe.instructions.join('\n') : recipe.instructions || 'No instructions available',
+            description: recipe.description || ''
           },
           ingredients: recipe.ingredients.map(ingredient => ({ ingredient })),
           tags: recipe.keywords || [],
@@ -118,7 +123,7 @@ const Cocktails = () => {
         // If no results, try Dify API
         if (drinks.length === 0) {
           console.log('No drinks found in CocktailDB, trying Dify API...');
-          const difyResults = await fetchDifyResponse(searchTerm);
+          const difyResults = await fetchDifyResponse(searchTerm, spirit);
           console.log('Received Dify results:', difyResults);
           drinks = difyResults;
         }
@@ -126,10 +131,22 @@ const Cocktails = () => {
         console.log('Setting cocktails state with:', drinks);
         setCocktails(drinks || []);
       } else if (spirit) {
+        // First try CocktailDB for spirit
         response = await axios.get(
           `https://www.thecocktaildb.com/api/json/v1/1/filter.php?i=${spirit}`
         );
-        setCocktails(response.data.drinks || []);
+        let drinks = response.data.drinks || [];
+
+        // If no results, try Dify API with spirit only
+        if (drinks.length === 0) {
+          console.log('No drinks found in CocktailDB for spirit, trying Dify API...');
+          const difyResults = await fetchDifyResponse(null, spirit);
+          console.log('Received Dify results for spirit:', difyResults);
+          drinks = difyResults;
+        }
+
+        console.log('Setting cocktails state with:', drinks);
+        setCocktails(drinks || []);
       }
     } catch (error) {
       console.error('Error fetching cocktail details:', {
